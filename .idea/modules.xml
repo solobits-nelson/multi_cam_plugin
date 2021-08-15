@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/multi_cam.iml" filepath="$PROJECT_DIR$/multi_cam.iml" />
+      <module fileurl="file://$PROJECT_DIR$/android/multi_cam_android.iml" filepath="$PROJECT_DIR$/android/multi_cam_android.iml" />
+      <module fileurl="file://$PROJECT_DIR$/example/android/multi_cam_example_android.iml" filepath="$PROJECT_DIR$/example/android/multi_cam_example_android.iml" />
+    </modules>
+  </component>
+</project>
