@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -10,33 +8,44 @@ class MultiCam extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // This is used in the platform side to register the view.
     final String viewType = 'multi_cam_plugin';
-    // Pass parameters to the platform side.
-    final Map<String, dynamic> creationParams = <String, dynamic>{};
 
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-      // return widget on Android.
+        return _NativeAndroid(viewType: viewType);
       case TargetPlatform.iOS:
-        return UiKitView(
-          viewType: viewType,
-          creationParams: creationParams,
-          creationParamsCodec: const StandardMessageCodec(),
-          gestureRecognizers: Set()
-            ..add(Factory<TapGestureRecognizer>(() => TapGestureRecognizer())),
-        );
+        return _NativeIOS(viewType: viewType);
       default:
         throw UnsupportedError("Unsupported platform view");
     }
   }
+}
 
-  // static const MethodChannel _channel =
-  //     const MethodChannel('multi_cam');
+class _NativeAndroid extends StatelessWidget {
+  const _NativeAndroid({Key? key, required this.viewType}) : super(key: key);
+  final String viewType;
 
-  // static Future<String?> get platformVersion async {
-  //   final String? version = await _channel.invokeMethod('getPlatformVersion');
-  //   return version;
-  // }
+  @override
+  Widget build(BuildContext context) {
+    return AndroidView(
+      viewType: viewType,
+      layoutDirection: TextDirection.ltr,
+      creationParamsCodec: const StandardMessageCodec(),
+    );
+  }
+}
 
+class _NativeIOS extends StatelessWidget {
+  const _NativeIOS({Key? key, required this.viewType}) : super(key: key);
+  final String viewType;
+
+  @override
+  Widget build(BuildContext context) {
+    return UiKitView(
+      viewType: viewType,
+      creationParamsCodec: const StandardMessageCodec(),
+      gestureRecognizers: Set()
+        ..add(Factory<TapGestureRecognizer>(() => TapGestureRecognizer())),
+    );
+  }
 }
