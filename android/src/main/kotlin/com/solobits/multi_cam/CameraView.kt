@@ -50,13 +50,17 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         return lifecycleRegistry
     }
 
+    fun doOnResume() {
+        lifecycleRegistry.markState(Lifecycle.State.RESUMED)
+    }
+
     init {
 
         //CAMERAX
         lifecycleRegistry.markState(Lifecycle.State.CREATED)
         cameraProviderFuture.addListener(Runnable {
             val cameraProvider = cameraProviderFuture.get()
-            bindPreview(cameraProvider, context)
+            bindPreview(cameraProvider)
         }, ContextCompat.getMainExecutor(context))
 
         previewView.layoutParams  = ViewGroup.LayoutParams(500,700)
@@ -74,31 +78,16 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 //        backView = RelativeLayout(context)
 //        backView.layoutParams = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT,RelativeLayout.LayoutParams.MATCH_PARENT)
 //        backView.addView(frontView)
-
-
-
-
     }
 
 
-    fun bindPreview(cameraProvider : ProcessCameraProvider, context:Context) {
+    fun bindPreview(cameraProvider : ProcessCameraProvider) {
         var preview : Preview = Preview.Builder()
             .build()
 
         var cameraSelector : CameraSelector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
             .build()
-
-
-        preview.
-
-        setOnPreviewOutputUpdateListener {
-            val parent = viewFinder.parent as ViewGroup
-            parent.removeView(viewFinder)
-            viewFinder.surfaceTexture = it.surfaceTexture
-            parent.addView(viewFinder, 0)
-            updateTransform()
-        }
 
 
         preview.setSurfaceProvider(previewView.surfaceProvider)

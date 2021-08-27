@@ -36,13 +36,6 @@ android {
 }
 
 dependencies {
-
-//    def camerax_version = "1.0.1"
-
-//    def camerax_version = "1.0.0-beta08"
-
-
-
     def camerax_version = "1.1.0-alpha08"
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
