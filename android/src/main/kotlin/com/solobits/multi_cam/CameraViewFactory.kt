@@ -1,7 +1,6 @@
 package com.solobits.multi_cam
 
 import android.content.Context
-import android.view.View
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory

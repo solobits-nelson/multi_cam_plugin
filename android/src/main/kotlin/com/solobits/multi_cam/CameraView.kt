@@ -1,100 +1,869 @@
 package com.solobits.multi_cam
 
-
-import android.Manifest
-import android.app.Activity
+import android.annotation.SuppressLint
+import android.content.ContentValues.TAG
 import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.Point
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.*
+import android.media.ImageReader
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import android.util.Size
+import android.view.TextureView
 import android.view.View
-import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.RelativeLayout
-import androidx.camera.camera2.Camera2Config
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.CameraXConfig
-import androidx.camera.core.Preview
-import androidx.camera.core.impl.utils.ContextUtil
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
-import com.google.common.util.concurrent.ListenableFuture
 import io.flutter.plugin.platform.PlatformView
+import java.util.*
+import java.util.concurrent.Semaphore
+import android.graphics.*
+import android.util.SparseIntArray
+import android.view.*
+
+
+internal class CameraView(context: Context, id: Int, creationParams: Map<String?, Any?>?) : PlatformView {
+    private val backView: FrameLayout = FrameLayout(context)
+    private val frontView: RelativeLayout = RelativeLayout(context)
+
+    private val appContext:Context = context
+
+
+    /**
+     * An additional thread for running tasks that shouldn't block the UI.
+     */
+    private var backgroundThreadFront: HandlerThread? = null
+
+    /**
+     * An additional thread for running tasks that shouldn't block the UI.
+     */
+    private var backgroundThreadRear: HandlerThread? = null
+
+    /**
+     * A [Handler] for running tasks in the background.
+     */
+    private var backgroundHandlerFront: Handler? = null
+
+    /**
+     * A [Handler] for running tasks in the background.
+     */
+    private var backgroundHandlerRear: Handler? = null
+
+
+    /**
+     * An [ImageReader] that handles still image capture.
+     */
+    private var imageReaderFront: ImageReader? = null
+
+    /**
+     * An [ImageReader] that handles still image capture.
+     */
+    private var imageReaderRear: ImageReader? = null
+
+    /**
+     * An [AutoFitTextureView] to show the camera preview from front camera.
+     */
+    private lateinit var textureViewFront: AutoFitTextureView
+
+    /**
+     * An [AutoFitTextureView] to show the camera preview from rear camera.
+     */
+    private lateinit var textureViewRear: AutoFitTextureView
+
+    /**
+     * A [CameraCaptureSession] for camera preview.
+     */
+    private var captureSessionFront: CameraCaptureSession? = null
+
+    /**
+     * A [CameraCaptureSession] for camera preview.
+     */
+    private var captureSessionRear: CameraCaptureSession? = null
+
+    /**
+     * A reference to the opened [CameraDevice].
+     */
+    private var cameraDeviceFront: CameraDevice? = null
+
+    /**
+     * A reference to the opened [CameraDevice].
+     */
+    private var cameraDeviceRear: CameraDevice? = null
+
+    /**
+     * The [android.util.Size] of camera preview.
+     */
+    private lateinit var previewSizeFront: Size
+
+    /**
+     * The [android.util.Size] of camera preview.
+     */
+    private lateinit var previewSizeRear: Size
+
+    /**
+     * ID of the current [CameraDevice].
+     */
+    private lateinit var cameraIdFront: String
+
+    /**
+     * ID of the current [CameraDevice].
+     */
+    private lateinit var cameraIdRear: String
+
+    /**
+     * Orientation of the camera sensor
+     */
+    private var sensorOrientationFront = 0
+
+    /**
+     * Orientation of the camera sensor
+     */
+    private var sensorOrientationRear = 0
+
+    /**
+     * A [Semaphore] to prevent the app from exiting before closing the camera.
+     */
+    private val cameraOpenCloseLockFront = Semaphore(1)
+
+    /**
+     * A [Semaphore] to prevent the app from exiting before closing the camera.
+     */
+    private val cameraOpenCloseLockRear = Semaphore(1)
+
+    /**
+     * [CaptureRequest.Builder] for the camera preview
+     */
+    private lateinit var previewRequestBuilderFront: CaptureRequest.Builder
+
+    /**
+     * [CaptureRequest.Builder] for the camera preview
+     */
+    private lateinit var previewRequestBuilderRear: CaptureRequest.Builder
+    /**
+     * Whether the current camera device supports Flash or not.
+     */
+    private var flashSupported = false
+
+    /**
+     * [CaptureRequest] generated by [.previewRequestBuilder]
+     */
+    private lateinit var previewRequestFront: CaptureRequest
+
+    /**
+     * [CaptureRequest] generated by [.previewRequestBuilder]
+     */
+    private lateinit var previewRequestRear: CaptureRequest
 
 
 
-internal class CameraView(context: Context, id: Int, creationParams: Map<String?, Any?>?) : PlatformView, LifecycleOwner {
-
-//    private val backView: RelativeLayout
-//    private val frontView: RelativeLayout
 
 
-    //CAMERAX
-    private val previewView: PreviewView = PreviewView(context)
-    private val lifecycleRegistry: LifecycleRegistry = LifecycleRegistry(this)
-    private var cameraProviderFuture : ListenableFuture<ProcessCameraProvider> =
-        ProcessCameraProvider.getInstance(context)
+    //TextureViewListeners
+    private val surfaceTextureListenerFront = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+            openCameraFront(width, height)
+        }
+        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+            configureTransformFront(width, height)
+        }
+        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture) = true
+        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+    }
+
+    private val surfaceTextureListenerRear = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+            openCameraRear(width, height)
+        }
+        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+            configureTransformRear(width, height)
+        }
+        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture) = true
+        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+    }
+
+
+
+
+    /**
+     * Starts a background thread and its [Handler].
+     */
+    private fun startBackgroundThread() {
+        backgroundThreadFront = HandlerThread("CameraBackgroundFront").also { it.start() }
+        backgroundThreadRear = HandlerThread("CameraBackgroundRear").also { it.start() }
+        backgroundHandlerFront = Handler(backgroundThreadFront!!.looper)
+        backgroundHandlerRear = Handler(backgroundThreadRear!!.looper)
+    }
+
+
+
+
+    //Camera Setup
+    private fun setUpCameraOutputsFront(width: Int, height: Int) {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            for (cameraId in manager.cameraIdList) {
+                val characteristics = manager.getCameraCharacteristics(cameraId)
+
+                // We don't use a front facing camera in this sample.
+                val cameraDirection = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (cameraDirection != null &&
+                        cameraDirection == CameraCharacteristics.LENS_FACING_BACK) {
+                    continue
+                }
+
+                val map = characteristics.get(
+                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: continue
+
+                // For still image captures, we use the largest available size.
+                val aspectRatio = Collections.max(
+                        Arrays.asList(*map.getOutputSizes(ImageFormat.JPEG)),
+                        CompareSizesByViewAspectRatio(textureViewFront.height, textureViewFront.width))
+                imageReaderFront = ImageReader.newInstance(aspectRatio.width, aspectRatio.height,
+                        ImageFormat.JPEG, /*maxImages*/ 2).apply {
+                    setOnImageAvailableListener(onImageAvailableListenerFront, backgroundHandlerFront)
+                }
+
+                Log.d(TAG, "selected aspect ratio " + aspectRatio.height  + "x" + aspectRatio.width + " : " + aspectRatio.height/aspectRatio.width)
+                // Find out if we need to swap dimension to get the preview size relative to sensor
+                // coordinate.
+                val displayRotation = appContext.display!!.rotation
+
+
+                sensorOrientationFront = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
+                val swappedDimensions = areDimensionsSwappedFront(displayRotation)
+
+                val displaySize = Point()
+                appContext.display!!.getSize(displaySize)
+                val rotatedPreviewWidth = if (swappedDimensions) height else width
+                val rotatedPreviewHeight = if (swappedDimensions) width else height
+                var maxPreviewWidth = if (swappedDimensions) displaySize.y else displaySize.x
+                var maxPreviewHeight = if (swappedDimensions) displaySize.x else displaySize.y
+
+                if (maxPreviewWidth > MAX_PREVIEW_WIDTH) maxPreviewWidth = MAX_PREVIEW_WIDTH
+                if (maxPreviewHeight > MAX_PREVIEW_HEIGHT) maxPreviewHeight = MAX_PREVIEW_HEIGHT
+
+                // Danger, W.R.! Attempting to use too large a preview size could exceed the camera
+                // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
+                // garbage capture data.
+                previewSizeFront = chooseOptimalSize(map.getOutputSizes(SurfaceTexture::class.java),
+                        rotatedPreviewWidth, rotatedPreviewHeight,
+                        maxPreviewWidth, maxPreviewHeight,
+                        aspectRatio)
+
+
+                /*
+                 * We are filling the whole view with camera preview, on a downside, this distorts
+                 * the aspect ratio.
+                 * To retain the aspect ratio, uncomment the below line.
+                 * Another option is the crop preview into the view, for that we have to choose
+                 * preview ratio such that it comes nearest to aspect ratio of view.
+                 */
+//                if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+//                    textureView.setAspectRatio(previewSize.width, previewSize.height)
+//                } else {
+//                    textureView.setAspectRatio(previewSize.height, previewSize.width)
+//                }
+
+                this.cameraIdFront = cameraId
+
+                // We've found a viable camera and finished setting up member variables,
+                // so we don't need to iterate through other available cameras.
+                return
+            }
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        } catch (e: NullPointerException) {
+            // Currently an NPE is thrown when the Camera2API is used but not supported on the
+            // device this code runs.
+            ErrorDialog.newInstance("This device doesn\\'t support Camera2 API")
+                    .showsDialog
+        }
+
+    }
+
+    private val onImageAvailableListenerFront = ImageReader.OnImageAvailableListener {
+//        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
+        Log.d(TAG, "onImageAvailableListenerFront Called")
+    }
+
+
+    private fun areDimensionsSwappedFront(displayRotation: Int): Boolean {
+        var swappedDimensions = false
+        when (displayRotation) {
+            Surface.ROTATION_0, Surface.ROTATION_180 -> {
+                if (sensorOrientationFront == 90 || sensorOrientationFront == 270) {
+                    swappedDimensions = true
+                }
+            }
+            Surface.ROTATION_90, Surface.ROTATION_270 -> {
+                if (sensorOrientationFront == 0 || sensorOrientationFront == 180) {
+                    swappedDimensions = true
+                }
+            }
+            else -> {
+                Log.e(TAG, "Display rotation is invalid: $displayRotation")
+            }
+        }
+        return swappedDimensions
+    }
+    /**
+     * Closes the current [CameraDevice].
+     */
+    private fun closeCameraFront() {
+        try {
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N) {
+                captureSessionFront?.stopRepeating();
+                captureSessionFront?.abortCaptures();
+            }
+
+            cameraOpenCloseLockFront.acquire()
+            captureSessionFront?.close()
+            captureSessionFront = null
+            cameraDeviceFront?.close()
+            cameraDeviceFront = null
+            imageReaderFront?.close()
+            imageReaderFront = null
+        } catch (e: InterruptedException) {
+            throw RuntimeException("Interrupted while trying to lock front camera closing.", e)
+        } finally {
+            cameraOpenCloseLockFront.release()
+        }
+    }
+
+    /**
+     * Closes the current [CameraDevice].
+     */
+    private fun closeCameraRear() {
+        try {
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N) {
+                captureSessionRear?.stopRepeating();
+                captureSessionRear?.abortCaptures();
+            }
+            cameraOpenCloseLockRear.acquire()
+            captureSessionRear?.close()
+            captureSessionRear = null
+            cameraDeviceRear?.close()
+            cameraDeviceRear = null
+            imageReaderRear?.close()
+            imageReaderRear = null
+        } catch (e: InterruptedException) {
+            throw RuntimeException("Interrupted while trying to lock rear camera closing.", e)
+        } finally {
+            cameraOpenCloseLockRear.release()
+        }
+    }
+    /**
+     * Sets up member variables related to rear camera.
+     *
+     * @param width  The width of available size for camera preview
+     * @param height The height of available size for camera preview
+     */
+    private fun setUpCameraOutputsRear(width: Int, height: Int) {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            for (cameraId in manager.cameraIdList) {
+                val characteristics = manager.getCameraCharacteristics(cameraId)
+
+                // We don't use a front facing camera in this sample.
+                val cameraDirection = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (cameraDirection != null &&
+                        cameraDirection == CameraCharacteristics.LENS_FACING_FRONT) {
+                    continue
+                }
+
+                val map = characteristics.get(
+                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: continue
+
+                // For still image captures, we use the largest available size.
+                val aspectRatio = Collections.max(
+                        Arrays.asList(*map.getOutputSizes(ImageFormat.JPEG)),
+                        CompareSizesByViewAspectRatio(textureViewRear.height, textureViewRear.width))
+                imageReaderRear = ImageReader.newInstance(aspectRatio.width, aspectRatio.height,
+                        ImageFormat.JPEG, /*maxImages*/ 2).apply {
+                    setOnImageAvailableListener(onImageAvailableListenerRear, backgroundHandlerRear)
+                }
+
+                Log.d(TAG, "selected aspect ratio " + aspectRatio.height  + "x" + aspectRatio.width + " : " + aspectRatio.height/aspectRatio.width)
+                // Find out if we need to swap dimension to get the preview size relative to sensor
+                // coordinate.
+                val displayRotation = appContext.display!!.rotation
+
+                sensorOrientationRear = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
+                val swappedDimensions = areDimensionsSwappedRear(displayRotation)
+
+                val displaySize = Point()
+                appContext.display!!.getSize(displaySize)
+                val rotatedPreviewWidth = if (swappedDimensions) height else width
+                val rotatedPreviewHeight = if (swappedDimensions) width else height
+                var maxPreviewWidth = if (swappedDimensions) displaySize.y else displaySize.x
+                var maxPreviewHeight = if (swappedDimensions) displaySize.x else displaySize.y
+
+                if (maxPreviewWidth > MAX_PREVIEW_WIDTH) maxPreviewWidth = MAX_PREVIEW_WIDTH
+                if (maxPreviewHeight > MAX_PREVIEW_HEIGHT) maxPreviewHeight = MAX_PREVIEW_HEIGHT
+
+                // Danger, W.R.! Attempting to use too large a preview size could exceed the camera
+                // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
+                // garbage capture data.
+                previewSizeRear = chooseOptimalSize(map.getOutputSizes(SurfaceTexture::class.java),
+                        rotatedPreviewWidth, rotatedPreviewHeight,
+                        maxPreviewWidth, maxPreviewHeight,
+                        aspectRatio)
+
+
+                /*
+                 * We are filling the whole view with camera preview, on a downside, this distorts
+                 * the aspect ratio.
+                 * To retain the aspect ratio, uncomment the below line.
+                 * Another option is the crop preview into the view, for that we have to choose
+                 * preview ratio such that it comes nearest to aspect ratio of view.
+                 */
+//                if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+//                    textureView.setAspectRatio(previewSize.width, previewSize.height)
+//                } else {
+//                    textureView.setAspectRatio(previewSize.height, previewSize.width)
+//                }
+
+                this.cameraIdRear = cameraId
+
+                // We've found a viable camera and finished setting up member variables,
+                // so we don't need to iterate through other available cameras.
+                return
+            }
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        } catch (e: NullPointerException) {
+            // Currently an NPE is thrown when the Camera2API is used but not supported on the
+            // device this code runs.
+            ErrorDialog.newInstance("This device doesn\\'t support Camera2 API")
+                    .showsDialog
+        }
+
+    }
+
+    /**
+     * This a callback object for the [ImageReader]. "onImageAvailable" will be called when a
+     * still image is ready to be saved.
+     */
+    private val onImageAvailableListenerRear = ImageReader.OnImageAvailableListener {
+        //        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
+        Log.d(TAG, "onImageAvailableListener Called")
+    }
+
+
+    /**
+     * Determines if the dimensions are swapped given the phone's current rotation.
+     *
+     * @param displayRotation The current rotation of the display
+     *
+     * @return true if the dimensions are swapped, false otherwise.
+     */
+    private fun areDimensionsSwappedRear(displayRotation: Int): Boolean {
+        var swappedDimensions = false
+        when (displayRotation) {
+            Surface.ROTATION_0, Surface.ROTATION_180 -> {
+                if (sensorOrientationRear == 90 || sensorOrientationRear == 270) {
+                    swappedDimensions = true
+                }
+            }
+            Surface.ROTATION_90, Surface.ROTATION_270 -> {
+                if (sensorOrientationRear == 0 || sensorOrientationRear == 180) {
+                    swappedDimensions = true
+                }
+            }
+            else -> {
+                Log.e(TAG, "Display rotation is invalid: $displayRotation")
+            }
+        }
+        return swappedDimensions
+    }
+
+
+
+
+
+    @SuppressLint("MissingPermission")
+    private fun openCameraFront(width: Int, height: Int) {
+        setUpCameraOutputsFront(width, height)
+        configureTransformFront(width, height)
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            manager.openCamera(cameraIdFront, stateCallbackFront, backgroundHandlerFront)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openCameraRear(width: Int, height: Int) {
+        setUpCameraOutputsRear(width, height)
+        configureTransformRear(width, height)
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            manager.openCamera(cameraIdRear, stateCallbackRear, backgroundHandlerRear)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        }
+    }
+
+
+    private val stateCallbackFront = object : CameraDevice.StateCallback() {
+        override fun onOpened(cameraDevice: CameraDevice) {
+            cameraDeviceFront = cameraDevice
+            createCameraPreviewSessionFront()
+        }
+        override fun onDisconnected(cameraDevice: CameraDevice) {
+            cameraDevice.close()
+            cameraDeviceFront = null
+        }
+        override fun onError(cameraDevice: CameraDevice, error: Int) {
+            onDisconnected(cameraDevice)
+            this.onClosed(cameraDevice)
+        }
+    }
+
+    /**
+     * [CameraDevice.StateCallback] is called when [CameraDevice] changes its state.
+     */
+    private val stateCallbackRear = object : CameraDevice.StateCallback() {
+
+        override fun onOpened(cameraDevice: CameraDevice) {
+            cameraDeviceFront = cameraDevice
+            createCameraPreviewSessionRear()
+        }
+        override fun onDisconnected(cameraDevice: CameraDevice) {
+            cameraDevice.close()
+            cameraDeviceFront = null
+        }
+        override fun onError(cameraDevice: CameraDevice, error: Int) {
+            onDisconnected(cameraDevice)
+            this.onClosed(cameraDevice)
+        }
+
+    }
+
+    /**
+     * Creates a new [CameraCaptureSession] for rear camera preview.
+     */
+    private fun createCameraPreviewSessionRear() {
+        try {
+            val texture = textureViewRear.surfaceTexture
+
+            // We configure the size of default buffer to be the size of camera preview we want.
+            texture?.setDefaultBufferSize(previewSizeRear.width, previewSizeRear.height)
+
+            // This is the output Surface we need to start preview.
+            val surface = Surface(texture)
+
+            // We set up a CaptureRequest.Builder with the output Surface.
+            previewRequestBuilderRear = cameraDeviceRear!!.createCaptureRequest(
+                    CameraDevice.TEMPLATE_PREVIEW
+            )
+            previewRequestBuilderRear.addTarget(surface)
+
+            // Here, we create a CameraCaptureSession for camera preview.
+            cameraDeviceRear?.createCaptureSession(Arrays.asList(surface, imageReaderRear?.surface),
+                    object : CameraCaptureSession.StateCallback() {
+
+                        override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
+                            // The camera is already closed
+                            if (cameraDeviceRear == null) return
+
+                            // When the session is ready, we start displaying the preview.
+                            captureSessionRear = cameraCaptureSession
+                            try {
+                                // Auto focus should be continuous for camera preview.
+                                previewRequestBuilderRear.set(CaptureRequest.CONTROL_AF_MODE,
+                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+
+                                // Finally, we start displaying the camera preview.
+                                previewRequestRear = previewRequestBuilderRear.build()
+                                captureSessionRear?.setRepeatingRequest(previewRequestRear,
+                                        captureCallback, backgroundHandlerRear)
+                            } catch (e: CameraAccessException) {
+                                Log.e(TAG, e.toString())
+                            }
+
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+//                        activity.showToast("Failed")
+                            Log.d(TAG, "CaptureSession failed")
+                        }
+                    }, null)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        }
+
+    }
+
+    private fun createCameraPreviewSessionFront() {
+        try {
+            val texture = textureViewFront.surfaceTexture
+
+            texture?.setDefaultBufferSize(previewSizeFront.width, previewSizeFront.height)
+            val surface = Surface(texture)
+            previewRequestBuilderFront = cameraDeviceFront!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            previewRequestBuilderFront.addTarget(surface)
+
+            // Here, we create a CameraCaptureSession for camera preview.
+            cameraDeviceFront?.createCaptureSession(Arrays.asList(surface, imageReaderFront?.surface), object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
+                    // The camera is already closed
+                    if (cameraDeviceFront == null) return
+                    // When the session is ready, we start displaying the preview.
+                    captureSessionFront = cameraCaptureSession
+                    try {
+                        // Auto focus should be continuous for camera preview.
+                        previewRequestBuilderFront.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                        // Finally, we start displaying the camera preview.
+                        previewRequestFront = previewRequestBuilderFront.build()
+                        captureSessionFront?.setRepeatingRequest(previewRequestFront, captureCallback, backgroundHandlerFront)
+                    } catch (e: CameraAccessException) {
+                        Log.e(TAG, e.toString())
+                    }
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                }
+            }, null)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        }
+    }
+
+    /**
+     * A [CameraCaptureSession.CaptureCallback] that handles events related to JPEG capture.
+     */
+    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+
+        private fun process(result: CaptureResult) {
+
+        }
+
+        private fun capturePicture(result: CaptureResult) {
+
+        }
+
+        override fun onCaptureProgressed(session: CameraCaptureSession,
+                                         request: CaptureRequest,
+                                         partialResult: CaptureResult) {
+            process(partialResult)
+        }
+
+        override fun onCaptureCompleted(session: CameraCaptureSession,
+                                        request: CaptureRequest,
+                                        result: TotalCaptureResult) {
+            process(result)
+        }
+
+    }
+
+
+
+
+
+
+    /**
+     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
+     * This method should be called after the camera preview size is determined in
+     * setUpCameraOutputs and also the size of `textureView` is fixed.
+     *
+     * @param viewWidth  The width of `textureView`
+     * @param viewHeight The height of `textureView`
+     */
+    private fun configureTransformFront(viewWidth: Int, viewHeight: Int) {
+        appContext ?: return
+        val rotation = appContext.display!!.rotation
+        val matrix = Matrix()
+        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, previewSizeFront.height.toFloat(), previewSizeFront.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            val scale = Math.max(
+                    viewHeight.toFloat() / previewSizeFront.height,
+                    viewWidth.toFloat() / previewSizeFront.width)
+            with(matrix) {
+                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                postScale(scale, scale, centerX, centerY)
+                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
+        } else if (Surface.ROTATION_180 == rotation) {
+            matrix.postRotate(180f, centerX, centerY)
+        }
+        textureViewFront.setTransform(matrix)
+    }
+
+    /**
+     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
+     * This method should be called after the camera preview size is determined in
+     * setUpCameraOutputs and also the size of `textureView` is fixed.
+     *
+     * @param viewWidth  The width of `textureView`
+     * @param viewHeight The height of `textureView`
+     */
+    private fun configureTransformRear(viewWidth: Int, viewHeight: Int) {
+        appContext ?: return
+        val rotation = appContext.display!!.rotation
+        val matrix = Matrix()
+        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, previewSizeRear.height.toFloat(), previewSizeRear.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            val scale = Math.max(
+                    viewHeight.toFloat() / previewSizeRear.height,
+                    viewWidth.toFloat() / previewSizeRear.width)
+            with(matrix) {
+                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                postScale(scale, scale, centerX, centerY)
+                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
+        } else if (Surface.ROTATION_180 == rotation) {
+            matrix.postRotate(180f, centerX, centerY)
+        }
+        textureViewRear.setTransform(matrix)
+    }
+
+
+
+
+    companion object {
+
+        /**
+         * Conversion from screen rotation to JPEG orientation.
+         */
+        private val ORIENTATIONS = SparseIntArray()
+        private val FRAGMENT_DIALOG = "dialog"
+
+        init {
+            ORIENTATIONS.append(Surface.ROTATION_0, 90)
+            ORIENTATIONS.append(Surface.ROTATION_90, 0)
+            ORIENTATIONS.append(Surface.ROTATION_180, 270)
+            ORIENTATIONS.append(Surface.ROTATION_270, 180)
+        }
+
+        /**
+         * Max preview width that is guaranteed by Camera2 API
+         */
+        private val MAX_PREVIEW_WIDTH = 1920
+
+        /**
+         * Max preview height that is guaranteed by Camera2 API
+         */
+        private val MAX_PREVIEW_HEIGHT = 1080
+
+
+        /**
+         * Given `choices` of `Size`s supported by a camera, choose the smallest one that
+         * is at least as large as the respective texture view size, and that is at most as large as
+         * the respective max size, and whose aspect ratio matches with the specified value. If such
+         * size doesn't exist, choose the largest one that is at most as large as the respective max
+         * size, and whose aspect ratio matches with the specified value.
+         *
+         * @param choices           The list of sizes that the camera supports for the intended
+         *                          output class
+         * @param textureViewWidth  The width of the texture view relative to sensor coordinate
+         * @param textureViewHeight The height of the texture view relative to sensor coordinate
+         * @param maxWidth          The maximum width that can be chosen
+         * @param maxHeight         The maximum height that can be chosen
+         * @param aspectRatio       The aspect ratio
+         * @return The optimal `Size`, or an arbitrary one if none were big enough
+         */
+        @JvmStatic private fun chooseOptimalSize(
+                choices: Array<Size>,
+                textureViewWidth: Int,
+                textureViewHeight: Int,
+                maxWidth: Int,
+                maxHeight: Int,
+                aspectRatio: Size
+        ): Size {
+
+            // Collect the supported resolutions that are at least as big as the preview Surface
+            val bigEnough = ArrayList<Size>()
+            // Collect the supported resolutions that are smaller than the preview Surface
+            val notBigEnough = ArrayList<Size>()
+            val w = aspectRatio.width
+            val h = aspectRatio.height
+            for (option in choices) {
+                if (option.width <= maxWidth && option.height <= maxHeight &&
+                        option.height == option.width * h / w) {
+                    if (option.width >= textureViewWidth && option.height >= textureViewHeight) {
+                        bigEnough.add(option)
+                    } else {
+                        notBigEnough.add(option)
+                    }
+                }
+            }
+
+            // Pick the smallest of those big enough. If there is no one big enough, pick the
+            // largest of those not big enough.
+            if (bigEnough.size > 0) {
+                return Collections.min(bigEnough, CompareSizesByViewAspectRatio(textureViewHeight, textureViewWidth))
+            } else if (notBigEnough.size > 0) {
+                return Collections.max(notBigEnough, CompareSizesByViewAspectRatio(textureViewHeight, textureViewWidth))
+            } else {
+                Log.e(TAG, "Couldn't find any suitable preview size")
+                return choices[0]
+            }
+        }
+
+        /**
+         * Tag for the [Log] from this class
+         */
+        private val TAG = "Multi_Cam"
+
+    }
 
 
     override fun getView(): View {
-        return previewView
+        return backView
     }
 
     override fun dispose() {}
 
-    //CameraX
-    override fun getLifecycle(): Lifecycle {
-        return lifecycleRegistry
-    }
-
-    fun doOnResume() {
-        lifecycleRegistry.markState(Lifecycle.State.RESUMED)
-    }
-
     init {
+        val params = RelativeLayout.LayoutParams(480, 550)
+        params.rightMargin = 5
+        params.bottomMargin = 5
+        params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT)
+        params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
 
-        //CAMERAX
-        lifecycleRegistry.markState(Lifecycle.State.CREATED)
-        cameraProviderFuture.addListener(Runnable {
-            val cameraProvider = cameraProviderFuture.get()
-            bindPreview(cameraProvider)
-        }, ContextCompat.getMainExecutor(context))
+        frontView.layoutParams = params;
 
-        previewView.layoutParams  = ViewGroup.LayoutParams(500,700)
+        textureViewFront = AutoFitTextureView(context)
+        textureViewRear = AutoFitTextureView(context)
 
 
-//        val params = RelativeLayout.LayoutParams(480, 550)
-//        params.rightMargin = 5
-//        params.bottomMargin = 5
-//        params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT)
-//        params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
-//
-//        frontView = RelativeLayout(context)
-//        frontView.layoutParams = params;
-//
-//        backView = RelativeLayout(context)
-//        backView.layoutParams = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT,RelativeLayout.LayoutParams.MATCH_PARENT)
-//        backView.addView(frontView)
+        frontView.addView(textureViewFront)
+
+
+
+        backView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT)
+        backView.addView(textureViewRear)
+        backView.addView(frontView)
+
+
+        startBackgroundThread()
+        // When the screen is turned off and turned back on, the SurfaceTexture is already
+        // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
+        // a camera and start preview from here (otherwise, we wait until the surface is ready in
+        // the SurfaceTextureListener).
+        if (textureViewFront.isAvailable) {
+            openCameraFront(textureViewFront.width, textureViewFront.height)
+        } else {
+            textureViewFront.surfaceTextureListener = surfaceTextureListenerFront
+        }
+        if (textureViewRear.isAvailable) {
+            openCameraRear(textureViewRear.width, textureViewRear.height)
+        } else {
+            textureViewRear.surfaceTextureListener = surfaceTextureListenerRear
+        }
     }
-
-
-    fun bindPreview(cameraProvider : ProcessCameraProvider) {
-        var preview : Preview = Preview.Builder()
-            .build()
-
-        var cameraSelector : CameraSelector = CameraSelector.Builder()
-            .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
-            .build()
-
-
-        preview.setSurfaceProvider(previewView.surfaceProvider)
-
-        cameraProvider.unbindAll()
-        var camera = cameraProvider.bindToLifecycle(this as LifecycleOwner, cameraSelector, preview)
-
-    }
-
 }
