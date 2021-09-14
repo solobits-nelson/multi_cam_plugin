@@ -1,8 +1,8 @@
 package com.solobits.multi_cam
 
-import android.annotation.SuppressLint
-import android.content.ContentValues.TAG
+import android.Manifest.permission.CAMERA
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Point
 import android.graphics.SurfaceTexture
@@ -17,20 +17,29 @@ import android.view.TextureView
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.RelativeLayout
-import io.flutter.plugin.platform.PlatformView
 import java.util.*
 import java.util.concurrent.Semaphore
 import android.graphics.*
 import android.util.SparseIntArray
 import android.view.*
+import androidx.core.app.ActivityCompat.requestPermissions
+import androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale
+import java.util.concurrent.TimeUnit
 
+import io.flutter.plugin.platform.PlatformView
+import android.app.Activity
+
+import android.R.attr.name
+import android.content.ContextWrapper
+
+import android.R.attr.name
+import android.R.attr.name
 
 internal class CameraView(context: Context, id: Int, creationParams: Map<String?, Any?>?) : PlatformView {
     private val backView: FrameLayout = FrameLayout(context)
     private val frontView: RelativeLayout = RelativeLayout(context)
 
     private val appContext:Context = context
-
 
     /**
      * An additional thread for running tasks that shouldn't block the UI.
@@ -158,49 +167,256 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
     private lateinit var previewRequestRear: CaptureRequest
 
 
+    /**
+     * This a callback object for the [ImageReader]. "onImageAvailable" will be called when a
+     * still image is ready to be saved.
+     */
+    private val onImageAvailableListenerFront = ImageReader.OnImageAvailableListener {
+//        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
+        Log.d(TAG, "onImageAvailableListenerFront Called")
+    }
 
 
+    /**
+     * This a callback object for the [ImageReader]. "onImageAvailable" will be called when a
+     * still image is ready to be saved.
+     */
+    private val onImageAvailableListenerRear = ImageReader.OnImageAvailableListener {
+        //        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
+        Log.d(TAG, "onImageAvailableListener Called")
+    }
 
-    //TextureViewListeners
+
+    /**
+     * A [CameraCaptureSession.CaptureCallback] that handles events related to JPEG capture.
+     */
+    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+
+        private fun process(result: CaptureResult) {
+
+        }
+
+        private fun capturePicture(result: CaptureResult) {
+
+        }
+
+        override fun onCaptureProgressed(session: CameraCaptureSession,
+                                         request: CaptureRequest,
+                                         partialResult: CaptureResult) {
+            process(partialResult)
+        }
+
+        override fun onCaptureCompleted(session: CameraCaptureSession,
+                                        request: CaptureRequest,
+                                        result: TotalCaptureResult) {
+            process(result)
+        }
+
+    }
+
+
+    /**
+     * [TextureView.SurfaceTextureListener] handles several lifecycle events on the front camera's
+     * [TextureView].
+     */
     private val surfaceTextureListenerFront = object : TextureView.SurfaceTextureListener {
+
         override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
             openCameraFront(width, height)
         }
+
         override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
             configureTransformFront(width, height)
         }
+
         override fun onSurfaceTextureDestroyed(texture: SurfaceTexture) = true
+
         override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+
     }
 
+    /**
+     * [TextureView.SurfaceTextureListener] handles several lifecycle events on the rear camera's
+     * [TextureView].
+     */
     private val surfaceTextureListenerRear = object : TextureView.SurfaceTextureListener {
+
         override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
             openCameraRear(width, height)
         }
+
         override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
             configureTransformRear(width, height)
         }
+
         override fun onSurfaceTextureDestroyed(texture: SurfaceTexture) = true
+
         override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+
     }
 
+    /**
+     * [CameraDevice.StateCallback] is called when [CameraDevice] changes its state.
+     */
+    private val stateCallbackFront = object : CameraDevice.StateCallback() {
+
+        override fun onOpened(cameraDevice: CameraDevice) {
+            cameraOpenCloseLockFront.release()
+            cameraDeviceFront = cameraDevice
+            createCameraPreviewSessionFront()
+        }
+
+        override fun onDisconnected(cameraDevice: CameraDevice) {
+            cameraOpenCloseLockFront.release()
+            cameraDevice.close()
+            cameraDeviceFront = null
+        }
+
+        override fun onError(cameraDevice: CameraDevice, error: Int) {
+            onDisconnected(cameraDevice)
+        }
+
+    }
+
+    /**
+     * [CameraDevice.StateCallback] is called when [CameraDevice] changes its state.
+     */
+    private val stateCallbackRear = object : CameraDevice.StateCallback() {
+
+        override fun onOpened(cameraDevice: CameraDevice) {
+            cameraOpenCloseLockRear.release()
+            cameraDeviceRear = cameraDevice
+            createCameraPreviewSessionRear()
+        }
+
+        override fun onDisconnected(cameraDevice: CameraDevice) {
+            cameraOpenCloseLockRear.release()
+            cameraDevice.close()
+            cameraDeviceRear = null
+        }
+
+        override fun onError(cameraDevice: CameraDevice, error: Int) {
+            onDisconnected(cameraDevice)
+            onClosed(cameraDevice)
+        }
+
+    }
+
+    override fun getView(): View {
+        return backView
+    }
+
+    override fun dispose() {
+        closeCameraFront()
+        closeCameraRear()
+        stopBackgroundThread()
+    }
+
+    init {
+        val params = RelativeLayout.LayoutParams(480, 550)
+        params.rightMargin = 5
+        params.bottomMargin = 5
+        params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT)
+        params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
+
+        frontView.layoutParams = params;
+
+        textureViewFront = AutoFitTextureView(context)
+        textureViewRear = AutoFitTextureView(context)
+
+        frontView.addView(textureViewFront)
+
+        backView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT)
+        backView.addView(textureViewRear)
+        backView.addView(frontView)
+
+
+        startBackgroundThread()
+        // When the screen is turned off and turned back on, the SurfaceTexture is already
+        // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
+        // a camera and start preview from here (otherwise, we wait until the surface is ready in
+        // the SurfaceTextureListener).
+        if (textureViewFront.isAvailable) {
+            openCameraFront(textureViewFront.width, textureViewFront.height)
+        } else {
+            textureViewFront.surfaceTextureListener = surfaceTextureListenerFront
+        }
+        if (textureViewRear.isAvailable) {
+            openCameraRear(textureViewRear.width, textureViewRear.height)
+        } else {
+            textureViewRear.surfaceTextureListener = surfaceTextureListenerRear
+        }
+    }
 
 
 
     /**
-     * Starts a background thread and its [Handler].
+     * Opens front camera specified by [Camera2BasicFragment.cameraId].
      */
-    private fun startBackgroundThread() {
-        backgroundThreadFront = HandlerThread("CameraBackgroundFront").also { it.start() }
-        backgroundThreadRear = HandlerThread("CameraBackgroundRear").also { it.start() }
-        backgroundHandlerFront = Handler(backgroundThreadFront!!.looper)
-        backgroundHandlerRear = Handler(backgroundThreadRear!!.looper)
+    private fun openCameraFront(width: Int, height: Int) {
+        val permission = appContext.let { appContext.checkSelfPermission(CAMERA) }
+        if (permission != PackageManager.PERMISSION_GRANTED) {
+//            requestCameraPermission()
+            return
+        }
+        setUpCameraOutputsFront(width, height)
+        configureTransformFront(width, height)
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            // Wait for camera to open - 2.5 seconds is sufficient
+            if (!cameraOpenCloseLockFront.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
+                throw RuntimeException("Time out waiting to lock camera opening.")
+            }
+            manager.openCamera(cameraIdFront, stateCallbackFront, backgroundHandlerRear)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        } catch (e: InterruptedException) {
+            throw RuntimeException("Interrupted while trying to lock camera opening.", e)
+        }
+
+    }
+
+    /**
+     * Opens rear camera specified by [Camera2BasicFragment.cameraId].
+     */
+    private fun openCameraRear(width: Int, height: Int) {
+        val permission = appContext.let { appContext.checkSelfPermission(CAMERA) }
+        if (permission != PackageManager.PERMISSION_GRANTED) {
+//            requestCameraPermission()
+            return
+        }
+        setUpCameraOutputsRear(width, height)
+        configureTransformRear(width, height)
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            // Wait for camera to open - 2.5 seconds is sufficient
+            if (!cameraOpenCloseLockRear.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
+                throw RuntimeException("Time out waiting to lock camera opening.")
+            }
+            manager.openCamera(cameraIdRear, stateCallbackRear, backgroundHandlerRear)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
+        } catch (e: InterruptedException) {
+            throw RuntimeException("Interrupted while trying to lock camera opening.", e)
+        }
+
     }
 
 
+//    private fun requestCameraPermission() {
+//        if (shouldShowRequestPermissionRationale(activity,CAMERA)) {
+//            ConfirmationDialog().showsDialog
+//        } else {
+//            requestPermissions(activity,arrayOf(CAMERA), REQUEST_CAMERA_PERMISSION)
+//        }
+//    }
 
-
-    //Camera Setup
+    /**
+     * Sets up member variables related to front camera.
+     *
+     * @param width  The width of available size for camera preview
+     * @param height The height of available size for camera preview
+     */
     private fun setUpCameraOutputsFront(width: Int, height: Int) {
         val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         try {
@@ -230,7 +446,6 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 val displayRotation = appContext.display!!.rotation
-
 
                 sensorOrientationFront = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
                 val swappedDimensions = areDimensionsSwappedFront(displayRotation)
@@ -284,31 +499,6 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 
     }
 
-    private val onImageAvailableListenerFront = ImageReader.OnImageAvailableListener {
-//        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
-        Log.d(TAG, "onImageAvailableListenerFront Called")
-    }
-
-
-    private fun areDimensionsSwappedFront(displayRotation: Int): Boolean {
-        var swappedDimensions = false
-        when (displayRotation) {
-            Surface.ROTATION_0, Surface.ROTATION_180 -> {
-                if (sensorOrientationFront == 90 || sensorOrientationFront == 270) {
-                    swappedDimensions = true
-                }
-            }
-            Surface.ROTATION_90, Surface.ROTATION_270 -> {
-                if (sensorOrientationFront == 0 || sensorOrientationFront == 180) {
-                    swappedDimensions = true
-                }
-            }
-            else -> {
-                Log.e(TAG, "Display rotation is invalid: $displayRotation")
-            }
-        }
-        return swappedDimensions
-    }
     /**
      * Closes the current [CameraDevice].
      */
@@ -437,19 +627,103 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         } catch (e: NullPointerException) {
             // Currently an NPE is thrown when the Camera2API is used but not supported on the
             // device this code runs.
-            ErrorDialog.newInstance("This device doesn\\'t support Camera2 API")
+            ErrorDialog.newInstance("This device doesn\\'t support Camera2 API.")
                     .showsDialog
         }
 
     }
 
+
+
     /**
-     * This a callback object for the [ImageReader]. "onImageAvailable" will be called when a
-     * still image is ready to be saved.
+     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
+     * This method should be called after the camera preview size is determined in
+     * setUpCameraOutputs and also the size of `textureView` is fixed.
+     *
+     * @param viewWidth  The width of `textureView`
+     * @param viewHeight The height of `textureView`
      */
-    private val onImageAvailableListenerRear = ImageReader.OnImageAvailableListener {
-        //        backgroundHandler?.post(ImageSaver(it.acquireNextImage(), file))
-        Log.d(TAG, "onImageAvailableListener Called")
+    private fun configureTransformFront(viewWidth: Int, viewHeight: Int) {
+        val rotation = appContext.display!!.rotation
+        val matrix = Matrix()
+        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, previewSizeFront.height.toFloat(), previewSizeFront.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            val scale = Math.max(
+                    viewHeight.toFloat() / previewSizeFront.height,
+                    viewWidth.toFloat() / previewSizeFront.width)
+            with(matrix) {
+                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                postScale(scale, scale, centerX, centerY)
+                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
+        } else if (Surface.ROTATION_180 == rotation) {
+            matrix.postRotate(180f, centerX, centerY)
+        }
+        textureViewFront.setTransform(matrix)
+    }
+
+    /**
+     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
+     * This method should be called after the camera preview size is determined in
+     * setUpCameraOutputs and also the size of `textureView` is fixed.
+     *
+     * @param viewWidth  The width of `textureView`
+     * @param viewHeight The height of `textureView`
+     */
+    private fun configureTransformRear(viewWidth: Int, viewHeight: Int) {
+        val rotation = appContext.display!!.rotation
+        val matrix = Matrix()
+        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, previewSizeRear.height.toFloat(), previewSizeRear.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            val scale = Math.max(
+                    viewHeight.toFloat() / previewSizeRear.height,
+                    viewWidth.toFloat() / previewSizeRear.width)
+            with(matrix) {
+                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                postScale(scale, scale, centerX, centerY)
+                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
+        } else if (Surface.ROTATION_180 == rotation) {
+            matrix.postRotate(180f, centerX, centerY)
+        }
+        textureViewRear.setTransform(matrix)
+    }
+
+    /**
+     * Determines if the dimensions are swapped given the phone's current rotation.
+     *
+     * @param displayRotation The current rotation of the display
+     *
+     * @return true if the dimensions are swapped, false otherwise.
+     */
+    private fun areDimensionsSwappedFront(displayRotation: Int): Boolean {
+        var swappedDimensions = false
+        when (displayRotation) {
+            Surface.ROTATION_0, Surface.ROTATION_180 -> {
+                if (sensorOrientationFront == 90 || sensorOrientationFront == 270) {
+                    swappedDimensions = true
+                }
+            }
+            Surface.ROTATION_90, Surface.ROTATION_270 -> {
+                if (sensorOrientationFront == 0 || sensorOrientationFront == 180) {
+                    swappedDimensions = true
+                }
+            }
+            else -> {
+                Log.e(TAG, "Display rotation is invalid: $displayRotation")
+            }
+        }
+        return swappedDimensions
     }
 
 
@@ -480,66 +754,86 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         return swappedDimensions
     }
 
-
-
-
-
-    @SuppressLint("MissingPermission")
-    private fun openCameraFront(width: Int, height: Int) {
-        setUpCameraOutputsFront(width, height)
-        configureTransformFront(width, height)
-        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        try {
-            manager.openCamera(cameraIdFront, stateCallbackFront, backgroundHandlerFront)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, e.toString())
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun openCameraRear(width: Int, height: Int) {
-        setUpCameraOutputsRear(width, height)
-        configureTransformRear(width, height)
-        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        try {
-            manager.openCamera(cameraIdRear, stateCallbackRear, backgroundHandlerRear)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, e.toString())
-        }
-    }
-
-
-    private val stateCallbackFront = object : CameraDevice.StateCallback() {
-        override fun onOpened(cameraDevice: CameraDevice) {
-            cameraDeviceFront = cameraDevice
-            createCameraPreviewSessionFront()
-        }
-        override fun onDisconnected(cameraDevice: CameraDevice) {
-            cameraDevice.close()
-            cameraDeviceFront = null
-        }
-        override fun onError(cameraDevice: CameraDevice, error: Int) {
-            onDisconnected(cameraDevice)
-            this.onClosed(cameraDevice)
-        }
+    /**
+     * Starts a background thread and its [Handler].
+     */
+    private fun startBackgroundThread() {
+        backgroundThreadFront = HandlerThread("CameraBackgroundFront").also { it.start() }
+        backgroundThreadRear = HandlerThread("CameraBackgroundRear").also { it.start() }
+        backgroundHandlerFront = Handler(backgroundThreadFront!!.looper)
+        backgroundHandlerRear = Handler(backgroundThreadRear!!.looper)
     }
 
     /**
-     * [CameraDevice.StateCallback] is called when [CameraDevice] changes its state.
+     * Stops the background thread and its [Handler].
      */
-    private val stateCallbackRear = object : CameraDevice.StateCallback() {
+    private fun stopBackgroundThread() {
+        backgroundThreadFront?.quitSafely()
+        backgroundThreadRear?.quitSafely()
+        try {
+            backgroundThreadFront?.join()
+            backgroundThreadFront = null
+            backgroundHandlerFront = null
 
-        override fun onOpened(cameraDevice: CameraDevice) {
-            cameraDeviceFront = cameraDevice
-            createCameraPreviewSessionRear()
+            backgroundThreadRear?.join()
+            backgroundThreadRear = null
+            backgroundHandlerRear = null
+        } catch (e: InterruptedException) {
+            Log.e(TAG, e.toString())
         }
-        override fun onDisconnected(cameraDevice: CameraDevice) {
-            cameraDevice.close()
-            cameraDeviceFront = null
-        }
-        override fun onError(cameraDevice: CameraDevice, error: Int) {
-            onDisconnected(cameraDevice)
-            this.onClosed(cameraDevice)
+
+    }
+
+    /**
+     * Creates a new [CameraCaptureSession] for front camera preview.
+     */
+    private fun createCameraPreviewSessionFront() {
+        try {
+            val texture = textureViewFront.surfaceTexture
+
+            // We configure the size of default buffer to be the size of camera preview we want.
+            texture!!.setDefaultBufferSize(previewSizeFront.width, previewSizeFront.height)
+
+            // This is the output Surface we need to start preview.
+            val surface = Surface(texture)
+
+            // We set up a CaptureRequest.Builder with the output Surface.
+            previewRequestBuilderFront = cameraDeviceFront!!.createCaptureRequest(
+                    CameraDevice.TEMPLATE_PREVIEW
+            )
+            previewRequestBuilderFront.addTarget(surface)
+
+            // Here, we create a CameraCaptureSession for camera preview.
+            cameraDeviceFront?.createCaptureSession(Arrays.asList(surface, imageReaderFront?.surface),
+                    object : CameraCaptureSession.StateCallback() {
+
+                        override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
+                            // The camera is already closed
+                            if (cameraDeviceFront == null) return
+
+                            // When the session is ready, we start displaying the preview.
+                            captureSessionFront = cameraCaptureSession
+                            try {
+                                // Auto focus should be continuous for camera preview.
+                                previewRequestBuilderFront.set(CaptureRequest.CONTROL_AF_MODE,
+                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+
+                                // Finally, we start displaying the camera preview.
+                                previewRequestFront = previewRequestBuilderFront.build()
+                                captureSessionFront?.setRepeatingRequest(previewRequestFront,
+                                        captureCallback, backgroundHandlerFront)
+                            } catch (e: CameraAccessException) {
+                                Log.e(TAG, e.toString())
+                            }
+
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            Log.d(TAG, "CaptureSession failed")
+                        }
+                    }, null)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, e.toString())
         }
 
     }
@@ -552,7 +846,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
             val texture = textureViewRear.surfaceTexture
 
             // We configure the size of default buffer to be the size of camera preview we want.
-            texture?.setDefaultBufferSize(previewSizeRear.width, previewSizeRear.height)
+            texture!!.setDefaultBufferSize(previewSizeRear.width, previewSizeRear.height)
 
             // This is the output Surface we need to start preview.
             val surface = Surface(texture)
@@ -598,140 +892,6 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         }
 
     }
-
-    private fun createCameraPreviewSessionFront() {
-        try {
-            val texture = textureViewFront.surfaceTexture
-
-            texture?.setDefaultBufferSize(previewSizeFront.width, previewSizeFront.height)
-            val surface = Surface(texture)
-            previewRequestBuilderFront = cameraDeviceFront!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            previewRequestBuilderFront.addTarget(surface)
-
-            // Here, we create a CameraCaptureSession for camera preview.
-            cameraDeviceFront?.createCaptureSession(Arrays.asList(surface, imageReaderFront?.surface), object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
-                    // The camera is already closed
-                    if (cameraDeviceFront == null) return
-                    // When the session is ready, we start displaying the preview.
-                    captureSessionFront = cameraCaptureSession
-                    try {
-                        // Auto focus should be continuous for camera preview.
-                        previewRequestBuilderFront.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                        // Finally, we start displaying the camera preview.
-                        previewRequestFront = previewRequestBuilderFront.build()
-                        captureSessionFront?.setRepeatingRequest(previewRequestFront, captureCallback, backgroundHandlerFront)
-                    } catch (e: CameraAccessException) {
-                        Log.e(TAG, e.toString())
-                    }
-                }
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                }
-            }, null)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, e.toString())
-        }
-    }
-
-    /**
-     * A [CameraCaptureSession.CaptureCallback] that handles events related to JPEG capture.
-     */
-    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
-
-        private fun process(result: CaptureResult) {
-
-        }
-
-        private fun capturePicture(result: CaptureResult) {
-
-        }
-
-        override fun onCaptureProgressed(session: CameraCaptureSession,
-                                         request: CaptureRequest,
-                                         partialResult: CaptureResult) {
-            process(partialResult)
-        }
-
-        override fun onCaptureCompleted(session: CameraCaptureSession,
-                                        request: CaptureRequest,
-                                        result: TotalCaptureResult) {
-            process(result)
-        }
-
-    }
-
-
-
-
-
-
-    /**
-     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
-     * This method should be called after the camera preview size is determined in
-     * setUpCameraOutputs and also the size of `textureView` is fixed.
-     *
-     * @param viewWidth  The width of `textureView`
-     * @param viewHeight The height of `textureView`
-     */
-    private fun configureTransformFront(viewWidth: Int, viewHeight: Int) {
-        appContext ?: return
-        val rotation = appContext.display!!.rotation
-        val matrix = Matrix()
-        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        val bufferRect = RectF(0f, 0f, previewSizeFront.height.toFloat(), previewSizeFront.width.toFloat())
-        val centerX = viewRect.centerX()
-        val centerY = viewRect.centerY()
-
-        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-            val scale = Math.max(
-                    viewHeight.toFloat() / previewSizeFront.height,
-                    viewWidth.toFloat() / previewSizeFront.width)
-            with(matrix) {
-                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-                postScale(scale, scale, centerX, centerY)
-                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
-            }
-        } else if (Surface.ROTATION_180 == rotation) {
-            matrix.postRotate(180f, centerX, centerY)
-        }
-        textureViewFront.setTransform(matrix)
-    }
-
-    /**
-     * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
-     * This method should be called after the camera preview size is determined in
-     * setUpCameraOutputs and also the size of `textureView` is fixed.
-     *
-     * @param viewWidth  The width of `textureView`
-     * @param viewHeight The height of `textureView`
-     */
-    private fun configureTransformRear(viewWidth: Int, viewHeight: Int) {
-        appContext ?: return
-        val rotation = appContext.display!!.rotation
-        val matrix = Matrix()
-        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        val bufferRect = RectF(0f, 0f, previewSizeRear.height.toFloat(), previewSizeRear.width.toFloat())
-        val centerX = viewRect.centerX()
-        val centerY = viewRect.centerY()
-
-        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-            val scale = Math.max(
-                    viewHeight.toFloat() / previewSizeRear.height,
-                    viewWidth.toFloat() / previewSizeRear.width)
-            with(matrix) {
-                setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-                postScale(scale, scale, centerX, centerY)
-                postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
-            }
-        } else if (Surface.ROTATION_180 == rotation) {
-            matrix.postRotate(180f, centerX, centerY)
-        }
-        textureViewRear.setTransform(matrix)
-    }
-
-
 
 
     companion object {
@@ -817,53 +977,10 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         /**
          * Tag for the [Log] from this class
          */
-        private val TAG = "Multi_Cam"
+        private val TAG = "CameraView.kt"
 
+//        @JvmStatic fun newInstance(): CameraFragment = CameraFragment()
     }
 
 
-    override fun getView(): View {
-        return backView
-    }
-
-    override fun dispose() {}
-
-    init {
-        val params = RelativeLayout.LayoutParams(480, 550)
-        params.rightMargin = 5
-        params.bottomMargin = 5
-        params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT)
-        params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
-
-        frontView.layoutParams = params;
-
-        textureViewFront = AutoFitTextureView(context)
-        textureViewRear = AutoFitTextureView(context)
-
-
-        frontView.addView(textureViewFront)
-
-
-
-        backView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT)
-        backView.addView(textureViewRear)
-        backView.addView(frontView)
-
-
-        startBackgroundThread()
-        // When the screen is turned off and turned back on, the SurfaceTexture is already
-        // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
-        // a camera and start preview from here (otherwise, we wait until the surface is ready in
-        // the SurfaceTextureListener).
-        if (textureViewFront.isAvailable) {
-            openCameraFront(textureViewFront.width, textureViewFront.height)
-        } else {
-            textureViewFront.surfaceTextureListener = surfaceTextureListenerFront
-        }
-        if (textureViewRear.isAvailable) {
-            openCameraRear(textureViewRear.width, textureViewRear.height)
-        } else {
-            textureViewRear.surfaceTextureListener = surfaceTextureListenerRear
-        }
-    }
 }
