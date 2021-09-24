@@ -2,20 +2,26 @@ PODS:
   - Flutter (1.0.0)
   - multi_cam (0.0.1):
     - Flutter
+  - "permission_handler (5.1.0+2)":
+    - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - multi_cam (from `.symlinks/plugins/multi_cam/ios`)
+  - permission_handler (from `.symlinks/plugins/permission_handler/ios`)
 
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
   multi_cam:
     :path: ".symlinks/plugins/multi_cam/ios"
+  permission_handler:
+    :path: ".symlinks/plugins/permission_handler/ios"
 
 SPEC CHECKSUMS:
   Flutter: 434fef37c0980e73bb6479ef766c45957d4b510c
   multi_cam: 98d20afad3a549319098fe430202fb7faddbb359
+  permission_handler: ccb20a9fad0ee9b1314a52b70b76b473c5f8dab0
 
 PODFILE CHECKSUM: aafe91acc616949ddb318b77800a7f51bffa2a4c
 

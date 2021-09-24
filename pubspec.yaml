@@ -1,5 +1,5 @@
 name: multi_cam
-description: Plugin to access both front and back cameras on Android & iOS. 
+description: Plugin to access both front and back cameras on iOS. 
 version: 0.0.1
 homepage:
 
@@ -18,8 +18,8 @@ dev_dependencies:
 flutter:
   plugin:
     platforms:
-      android:
-        package: com.solobits.multi_cam
-        pluginClass: MultiCamPlugin
       ios:
         pluginClass: MultiCamPlugin
+      # android:
+        # package: com.solobits.multi_cam
+        # pluginClass: MultiCamPlugin

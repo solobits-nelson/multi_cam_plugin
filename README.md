@@ -1,6 +1,8 @@
 # multi_cam
 
-A new flutter plugin project.
+A plugin to access both front and back cameras simultaneously.
+
+The plugin presents a native iOS view that shows both front and back cameras using flutter's Platform View.
 
 ## Getting Started
 
