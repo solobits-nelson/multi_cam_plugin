@@ -1,6 +1,7 @@
 package com.solobits.multi_cam
 
 import android.Manifest.permission.CAMERA
+import android.R.attr.*
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
@@ -29,17 +30,14 @@ import java.util.concurrent.TimeUnit
 import io.flutter.plugin.platform.PlatformView
 import android.app.Activity
 
-import android.R.attr.name
 import android.content.ContextWrapper
-
-import android.R.attr.name
-import android.R.attr.name
 
 internal class CameraView(context: Context, id: Int, creationParams: Map<String?, Any?>?) : PlatformView {
     private val backView: FrameLayout = FrameLayout(context)
     private val frontView: RelativeLayout = RelativeLayout(context)
 
-    private val appContext:Context = context
+    private val appContext: Context = context
+
 
     /**
      * An additional thread for running tasks that shouldn't block the UI.
@@ -72,15 +70,16 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
      */
     private var imageReaderRear: ImageReader? = null
 
-    /**
-     * An [AutoFitTextureView] to show the camera preview from front camera.
-     */
-    private lateinit var textureViewFront: AutoFitTextureView
 
     /**
      * An [AutoFitTextureView] to show the camera preview from rear camera.
      */
     private lateinit var textureViewRear: AutoFitTextureView
+
+    /**
+     * An [AutoFitTextureView] to show the camera preview from front camera.
+     */
+    private lateinit var textureViewFront: AutoFitTextureView
 
     /**
      * A [CameraCaptureSession] for camera preview.
@@ -102,15 +101,17 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
      */
     private var cameraDeviceRear: CameraDevice? = null
 
-    /**
-     * The [android.util.Size] of camera preview.
-     */
-    private lateinit var previewSizeFront: Size
 
     /**
      * The [android.util.Size] of camera preview.
      */
     private lateinit var previewSizeRear: Size
+
+    /**
+     * The [android.util.Size] of camera preview.
+     */
+    private lateinit var previewSizeFront: Size
+
 
     /**
      * ID of the current [CameraDevice].
@@ -151,6 +152,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
      * [CaptureRequest.Builder] for the camera preview
      */
     private lateinit var previewRequestBuilderRear: CaptureRequest.Builder
+
     /**
      * Whether the current camera device supports Flash or not.
      */
@@ -274,6 +276,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 
         override fun onError(cameraDevice: CameraDevice, error: Int) {
             onDisconnected(cameraDevice)
+
         }
 
     }
@@ -297,20 +300,19 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 
         override fun onError(cameraDevice: CameraDevice, error: Int) {
             onDisconnected(cameraDevice)
+
             onClosed(cameraDevice)
+
         }
 
     }
 
+
     override fun getView(): View {
-        return backView
+//        return backView
+        return frontView
     }
 
-    override fun dispose() {
-        closeCameraFront()
-        closeCameraRear()
-        stopBackgroundThread()
-    }
 
     init {
         val params = RelativeLayout.LayoutParams(480, 550)
@@ -321,14 +323,15 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 
         frontView.layoutParams = params;
 
-        textureViewFront = AutoFitTextureView(context)
         textureViewRear = AutoFitTextureView(context)
+        textureViewFront = AutoFitTextureView(context)
 
-        frontView.addView(textureViewFront)
+        frontView.addView(textureViewRear)
+//        frontView.addView(textureViewFront)
 
-        backView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT)
-        backView.addView(textureViewRear)
-        backView.addView(frontView)
+//        backView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+//        backView.addView(textureViewRear)
+//        backView.addView(frontView)
 
 
         startBackgroundThread()
@@ -336,25 +339,34 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
         // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
         // a camera and start preview from here (otherwise, we wait until the surface is ready in
         // the SurfaceTextureListener).
-        if (textureViewFront.isAvailable) {
-            openCameraFront(textureViewFront.width, textureViewFront.height)
-        } else {
-            textureViewFront.surfaceTextureListener = surfaceTextureListenerFront
-        }
+//        if (textureViewFront.isAvailable) {
+//            openCameraFront(textureViewFront.width, textureViewFront.height)
+//        }
+//        else {
+//            textureViewFront.surfaceTextureListener = surfaceTextureListenerFront
+//        }
         if (textureViewRear.isAvailable) {
             openCameraRear(textureViewRear.width, textureViewRear.height)
+
         } else {
             textureViewRear.surfaceTextureListener = surfaceTextureListenerRear
         }
     }
 
+    override fun dispose() {
+        closeCameraFront()
+        closeCameraRear()
+        stopBackgroundThread()
+    }
 
 
     /**
      * Opens front camera specified by [Camera2BasicFragment.cameraId].
      */
     private fun openCameraFront(width: Int, height: Int) {
+
         val permission = appContext.let { appContext.checkSelfPermission(CAMERA) }
+
         if (permission != PackageManager.PERMISSION_GRANTED) {
 //            requestCameraPermission()
             return
@@ -404,10 +416,10 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
 
 
 //    private fun requestCameraPermission() {
-//        if (shouldShowRequestPermissionRationale(activity,CAMERA)) {
-//            ConfirmationDialog().showsDialog
+//        if (shouldShowRequestPermissionRationale(CAMERA)) {
+//            ConfirmationDialog().show(childFragmentManager, FRAGMENT_DIALOG)
 //        } else {
-//            requestPermissions(activity,arrayOf(CAMERA), REQUEST_CAMERA_PERMISSION)
+//            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
 //        }
 //    }
 
@@ -442,7 +454,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
                     setOnImageAvailableListener(onImageAvailableListenerFront, backgroundHandlerFront)
                 }
 
-                Log.d(TAG, "selected aspect ratio " + aspectRatio.height  + "x" + aspectRatio.width + " : " + aspectRatio.height/aspectRatio.width)
+                Log.d(TAG, "selected aspect ratio " + aspectRatio.height + "x" + aspectRatio.width + " : " + aspectRatio.height / aspectRatio.width)
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 val displayRotation = appContext.display!!.rotation
@@ -545,6 +557,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
             cameraOpenCloseLockRear.release()
         }
     }
+
     /**
      * Sets up member variables related to rear camera.
      *
@@ -576,7 +589,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
                     setOnImageAvailableListener(onImageAvailableListenerRear, backgroundHandlerRear)
                 }
 
-                Log.d(TAG, "selected aspect ratio " + aspectRatio.height  + "x" + aspectRatio.width + " : " + aspectRatio.height/aspectRatio.width)
+                Log.d(TAG, "selected aspect ratio " + aspectRatio.height + "x" + aspectRatio.width + " : " + aspectRatio.height / aspectRatio.width)
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 val displayRotation = appContext.display!!.rotation
@@ -634,7 +647,6 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
     }
 
 
-
     /**
      * Configures the necessary [android.graphics.Matrix] transformation to `textureView`.
      * This method should be called after the camera preview size is determined in
@@ -677,6 +689,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
      */
     private fun configureTransformRear(viewWidth: Int, viewHeight: Int) {
         val rotation = appContext.display!!.rotation
+
         val matrix = Matrix()
         val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
         val bufferRect = RectF(0f, 0f, previewSizeRear.height.toFloat(), previewSizeRear.width.toFloat())
@@ -760,6 +773,7 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
     private fun startBackgroundThread() {
         backgroundThreadFront = HandlerThread("CameraBackgroundFront").also { it.start() }
         backgroundThreadRear = HandlerThread("CameraBackgroundRear").also { it.start() }
+
         backgroundHandlerFront = Handler(backgroundThreadFront!!.looper)
         backgroundHandlerRear = Handler(backgroundThreadRear!!.looper)
     }
@@ -936,7 +950,8 @@ internal class CameraView(context: Context, id: Int, creationParams: Map<String?
          * @param aspectRatio       The aspect ratio
          * @return The optimal `Size`, or an arbitrary one if none were big enough
          */
-        @JvmStatic private fun chooseOptimalSize(
+        @JvmStatic
+        private fun chooseOptimalSize(
                 choices: Array<Size>,
                 textureViewWidth: Int,
                 textureViewHeight: Int,
